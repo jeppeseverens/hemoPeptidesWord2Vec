@@ -1,4 +1,4 @@
-# proteinWord2Vec
+# Word2Vec for peptide class prediction
 
 In this repository I shortly showcase how Word2Vec can be used for representation learning to create features which represenet peptide sequences and secondary structure. Furthermore, the learned representations will be used as input features for a CNN to predict hemolytic activity. The use of Word2Vec to represent biolgical sequences was inspired by [1].
 
