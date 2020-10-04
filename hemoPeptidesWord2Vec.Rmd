@@ -34,11 +34,11 @@ of sequences and structures.
 
 ```{r}
 # Dataset of hemolytic and non hemolytic peptides, only need sequence and hemolytic info
-dataset <- read.csv("/home/jeppe/Dropbox/internship_TNO/Datasets/Hemo_databases/expHemoNonhemoPeps.csv")
+dataset <- read.csv("dataset/expHemoNonhemoPeps.csv")
 dataset <- dataset[,c("Sequence", "Hemolytic")]
 
 # Secondary structure
-SS3 <- read.csv("/home/jeppe/Dropbox/internship_TNO/Datasets/SS3/ss3_18july.csv")
+SS3 <- read.csv("dataset/ss3.csv")
 
 # We only need the sequence (X) and the secondary structure (SS)
 SS3 <- SS3[,c("X", "SS")]
