@@ -1,0 +1,348 @@
+## Packages
+
+```{r}
+library(word2vec)
+library(stringr)
+library(parallel)
+library(ComplexHeatmap)
+library(uwot)
+library(ggplot2)
+library(ggrepel)
+library(RColorBrewer)
+library(ggthemes)
+library(dplyr)
+library(keras)
+library(Matrix)
+library(tensorflow)
+library(caret)
+```
+
+## Word2Vec implementation on sequences and secondary structure
+Here we are going to train our word2vec model, which in short takes a word as input
+with the task to predict which words occur around it. The weights used for this
+are unique per word and these weights can be used as a feature representing that word.
+
+This is intersting because you would expect words with the same meaning to appear
+among the same words and thus to have kinda the same weight/vector.
+
+Instead of text we will use peptide sequences and the secondary structure (ss) as a sequence. 
+With 1 grams made out of the sequence/ss as the "words".
+
+First we will convert sequences and secondary structures to a format that works 
+for the word2vec wrapper package. Then we will train our word2vec representation
+of sequences and structures. 
+
+```{r}
+# Dataset of hemolytic and non hemolytic peptides, only need sequence and hemolytic info
+dataset <- read.csv("/home/jeppe/Dropbox/internship_TNO/Datasets/Hemo_databases/expHemoNonhemoPeps.csv")
+dataset <- dataset[,c("Sequence", "Hemolytic")]
+
+# Secondary structure
+SS3 <- read.csv("/home/jeppe/Dropbox/internship_TNO/Datasets/SS3/ss3_18july.csv")
+
+# We only need the sequence (X) and the secondary structure (SS)
+SS3 <- SS3[,c("X", "SS")]
+colnames(SS3) <- c("Sequence","SS")
+
+# Then we need to match our hemolytic info to secondary structure
+dataset <- merge(dataset, SS3, by = "Sequence")
+
+# Get out sequences and structures so we can make sentences out of them
+# Sequences we can just store
+sequences <- as.character(dataset$Sequence)
+
+# Secondary structures we need to modify a bit 
+secondaryStructures <- as.character(dataset$SS)
+secondaryStructures <- gsub(pattern = "H", replacement = "helix ", x = secondaryStructures)
+secondaryStructures <- gsub(pattern = "E", replacement = "sheet ", x = secondaryStructures)
+secondaryStructures <- gsub(pattern = "C", replacement = "coil ", x = secondaryStructures)
+```
+
+Make 1-gram sentences out of the above information. Dont forget to set mc.cores
+to how many cores you want to use
+
+```{r}
+# Split the sequences and structure in vectors so we can combine them
+# For sequence we use boundary to break at each character
+sequences <-
+  mclapply(1:length(sequences), function (x)
+    str_split(sequences[x],
+              pattern = boundary("character")),
+    mc.cores = 7)
+sequences[[1]]
+
+# For structure we use boundary to break at the spaces
+secondaryStructures <-
+  mclapply(1:length(secondaryStructures), function (x)
+    str_split(secondaryStructures[x],
+              pattern = boundary("word")),
+    mc.cores = 7)
+secondaryStructures[[1]]
+
+# str_c combines vectors ellements wise and collapse with " ", like advanced paste0 
+sentences <-
+  mclapply(1:length(secondaryStructures), function (x)
+    str_c(sequences[[x]][[1]], secondaryStructures[[x]][[1]], collapse = " "))
+sentences[[1]]
+
+# Cbind with our dataset
+sentences <- as.data.frame(unlist(sentences), stringsAsFactors
+                                  = FALSE)
+colnames(sentences) <- "Sentences1gram"
+dataset <- cbind(dataset, sentences)
+```
+
+## Word2vec model training
+Now that we have our input information in the right structure we can train 
+our word2vec representations of the information
+
+First for the 1-gram model.For a matrix with the representative feature per 
+amino acid/secondary structure we will use 100 dims. Because running a cnn over ~3800 matrices
+of 133 by for example 300 is just undoable on my laptop (I doubt 133 by 100 will be smooth but
+we will see). From literature on peptide class predictions a window 25 seems to 
+work well. From literature window size in NLP seems to affect word relations. For example
+small windows size for apple the vector is near other fruits, and for a bigger window 
+apple matches foods more in general.
+
+In this example I only use dim = 100 and window = 25
+
+```{r}
+# Extract sentences as vector so word2vec can use them
+sentences1GramHemo <- as.vector(sentences$Sentences1gram)
+
+# "_" as seperator looked good but word2vec will split it as seperate words...
+sentences1GramHemo <- gsub("_", "", x = sentences1GramHemo)
+
+# Train our model and we store it
+# Skipgram because it is more precise 
+# Iter at just a high number, stackexchange says after 20 doesnt really matter
+modelSentences1gram <- word2vec(
+      x = sentences1GramHemo,
+      type = "skip-gram",
+      dim = 100,
+      window = 25,
+      threads = 6,
+      iter = 20,
+      min_count = 1
+    )
+```
+
+Now we can extract the representations per 1 gram
+
+```{r}
+df1gram <- as.matrix(modelSentences1gram)
+head(df1gram, n = 2)
+```
+
+## word2vec features visual analysis
+
+Let's visualise what happened
+
+```{r}
+# </s> is a stop signal, which is basically the end of the sentence. 
+# You would need this in a text
+# I see no reason to keep this for a peptide sequence, so: remove
+df1gram <- df1gram[-which(rownames(df1gram) == "</s>"),]
+# Add space between amino acid and structure
+rownames(df1gram) <- gsub("(^.)", "\\1 ", rownames(df1gram))
+# Create Umap so we can visually inspect how words relate to each other and guess clusters
+set.seed(2)
+
+# UMAP for 1grams
+umap1GramFeatures <- umap(df1gram, n_neighbors = 15, n_threads = 2, spread = 10)
+
+# Store in df for ggplot
+df1GramFeaturesUmap  <- data.frame(word = gsub("(^.)", "\\1 ", rownames(df1gram)), 
+                  xpos = gsub(".+//", "", rownames(df1gram)), 
+                  x = umap1GramFeatures[, 1], y = umap1GramFeatures[, 2], 
+                  stringsAsFactors = FALSE)
+# Plot umap of 1 gram
+ggplot(df1GramFeaturesUmap, aes(x = x, y = y, label = word)) +
+  geom_point() + geom_text_repel() + theme_void()
+```
+
+Let's add some metadata so we can maybe see some extra info. Note how W coil and
+R coil cluster near 1-grams with a sheet configuration.
+
+```{r}
+# Add information about the 1-grams, simply what "c;ass" the amno acid belongs to
+df1GramFeaturesUmap$'Amino acid properties' <- "Hydrophobic"
+df1GramFeaturesUmap[grepl("S|T", x = df1GramFeaturesUmap$word),5] <- "Polar (positive)"
+df1GramFeaturesUmap[grepl("N|Q", x = df1GramFeaturesUmap$word),5] <- "Polar (negative)"
+df1GramFeaturesUmap[grepl("C|G|P", x = df1GramFeaturesUmap$word),5] <- "Special-cases"
+df1GramFeaturesUmap[grepl("R|H|K", x = df1GramFeaturesUmap$word),5] <- "Charge (positive)"
+df1GramFeaturesUmap[grepl("D|E", x = df1GramFeaturesUmap$word),5] <- "Charge (negative)"
+
+# Plot
+ggplot(df1GramFeaturesUmap, aes(x = x, y = y, label = word, color = df1GramFeaturesUmap[,5])) + theme_void() + scale_color_manual(values = c('#e41a1c','#377eb8','#4daf4a','#984ea3','#ff7f00','#999999','#a65628','#f781bf','#999999')) +
+  labs(color = "Amino acid properties") + theme(legend.text=element_text(size=11)) +  coord_cartesian(clip = "off")+ 
+  geom_text_repel(segment.alpha = 0) + xlim(c(-40, 35))  + ylim(c(-40, 35))+ ggtitle("UMAP of the numerical features based on 1 grams") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+We can visualise this in a nice heat map, also good way to see that these numerical
+vectors per words have overlap and differences which you can cluster/classify with
+
+```{r}
+set.seed(1)
+# Heatmap, dont cluster columns and cluster rows to 3
+Heatmap(df1gram, cluster_columns = FALSE, row_names_gp = gpar(fontsize = 8), show_column_dend = FALSE, show_row_dend = TRUE, row_km = 3, name = "1 Gram features\n", heatmap_legend_param = list(labels = c("Minimum", "", "", "", "Maximum")), column_title = "Heatmap of all numerical features based on 1 grams")
+```
+
+We can zoom in on three amino acids and their three classes
+
+```{r}
+# Order the data so rows are organised in heatmap
+order <- str_sort(grep("G .....?|L .....?|K .....?", rownames(df1gram), value = TRUE))
+order <- sort(rownames(df1gram[grepl("G .....?|L .....?|K .....?", rownames(df1gram)),]))
+# Heatmap
+Heatmap(df1gram[grepl("G .....?|L .....?|K .....?", rownames(df1gram)),], cluster_rows = F, cluster_columns = FALSE, row_names_gp = gpar(fontsize = 11), row_order = order,  name = "1 Gram features\n", row_split = c("Glycine","Leucine","Leucine","Lysine","Glycine","Lysine","Leucine","Lysine","Glycine"), heatmap_legend_param = list(labels = c("Minimum", "", "", "", "Maximum")), column_title = "Heatmap of the numerical features based on the 1 grams of glycine, \nleucine and lysine and secondary structures")
+```
+
+## Create matrices to use in our cnn
+Well we have our representations, lets put them in a matrix based on which 1-grams
+appear in the peptide and then we can use that to train and test a CNN!
+
+```{r}
+# change this back
+rownames(df1gram) <- gsub(" ", "", x = rownames(df1gram))
+
+sentencesAsMatrices1gram <-
+    mclapply(1:nrow(dataset), function(y) {
+ # String spit into the 1-grams
+splitString <-
+        unlist(str_split(dataset$Sentences1gram[y], pattern = " "))
+      # Create empty zero matrix to zero pad sentences shorter than 133 aminoacids
+      # We use Matrix to make sparse matrices which use a lot less memory
+      vectors <- Matrix(0, nrow = 133, ncol = ncol(df1gram), sparse = TRUE)
+      # Paste in our vectors
+      vectors[1:length(splitString),] <-
+        as.matrix(df1gram[splitString, ])
+      # Empty list to add our matrix to and add meta info
+      tempList <- list()
+      # add matrix and add Hemolytic and Sequence info
+      tempList$word2vecMatrix <- vectors
+      tempList$Sequence <- as.character(dataset$Sequence)[y]
+      tempList$Hemolytic <- dataset$Hemolytic[y]
+      return(tempList)
+}, mc.cores = 6)
+```
+
+# Train and test cnn
+We now have our matrices of 133 by 100 per peptide, with for each amino acid
+and the secondary structure it is located in a learned numerical vector. We will
+use our training set to train a CNN running over these matrices to learn to classify
+hemolytic and non-hemolytic peptides. 
+
+```{r}
+# First we make one array out of the matrices
+# Get all matrices and go from sparse Matrix to dense Matrix to matrix
+array <- lapply(1:length(sentencesAsMatrices1gram), function(x) as.matrix(Matrix(sentencesAsMatrices1gram[[x]][["word2vecMatrix"]], sparse = FALSE)))
+# Bind everything together so we can make array easily
+array <- do.call(rbind, array)
+# Make array, use array reshape since it is rowfirst
+array <- array_reshape(array, dim = c(length(sentencesAsMatrices1gram), 133, 100))
+
+# Get our classes
+y <- unlist(lapply(1:length(sentencesAsMatrices1gram), function(x) sentencesAsMatrices1gram[[x]][["Hemolytic"]]))
+
+# Create train and test set
+set.seed(1)
+train <- sample(1:length(sequences), size = 0.8 * length(sequences))
+test <- c(1:length(sequences))[-train]
+# split x
+train_x <- array[train,,]
+test_x <- array[test,,]
+# split y
+train_y <- y[train]
+test_y <- y[test]
+
+# Remove array, we need space + force garbage collection to free memory
+rm(array, sentencesAsMatrices1gram)
+gc()
+
+# Input shape
+input_shape <- c(133, 100)
+
+# Weights because our dataset is unbalanced
+weight_1 <- as.numeric(table(train_y)[1]/table(train_y)[2])
+class_weight <- list("0" = 1, "1" = weight_1)
+```
+
+Here I show an example model, I came to this model through an iterative process. 
+This model was heavily inspired by 
+https://bmcbioinformatics.biomedcentral.com/articles/10.1186/s12859-019-3006-z
+and
+https://arxiv.org/pdf/1408.5882v2.pdf
+
+```{r}
+model <- keras_model_sequential()
+
+# Set up our model
+model %>%
+  # Convolution part
+  layer_conv_1d(
+    filters = 64,  #  Number of filters of the conv. layer
+    kernel_size = c(8),  # Window size
+    strides = 1,  # Step size
+    input_shape = input_shape,  # Input shape
+    padding = "valid",  # Padding so our array length keeps at 133 
+  )  %>% 
+  
+  layer_batch_normalization() %>%  # Batch normalisation to prevent overfit
+  layer_activation_relu() %>% # Activation layer
+  layer_dropout(rate = 0.6) %>%  # Dropout layer
+  layer_max_pooling_1d()  %>%
+  
+  layer_flatten() %>%  # Flatten so dense layer can handle it
+  
+  # Dense layer part (fully connected layer is also a term that is used)
+  layer_dense(units = 16) %>%   # Number of nodes in the dense layer
+  layer_activation_relu() %>%  # Activtation
+  layer_batch_normalization() %>%   # Batch normalisation
+  layer_dropout(rate = 0.6) %>% # Dropout
+  
+  # Activation layer
+  layer_dense(units = 1, activation = 'sigmoid')  # Activation layer
+
+# Here we set up how the model should be optimized, we will use the
+# Adam optimizer which works well for binary data, and the binary_crossentropy
+# loss function because we are working with binary classification
+# We set the evaluation metric to accuracy, but we won't really use it
+model %>% compile(optimizer = 'adam',
+                        loss = 'binary_crossentropy',
+                        metrics = list('accuracy'))
+
+# And we train the model, batch size 32 because that is standard number
+# We let keras take a part of the training data as validation split
+# and we set out class weights here
+# Callback_early_stopping will monitor the loss of the validation_set and stop
+# if it does not lower for 10 steps
+model %>% fit(
+  train_x,
+  train_y,
+  verbose = 1,
+  epochs = 25,
+  batch_size = 32,
+  class_weight = class_weight
+)
+```
+
+We have a model, but now how does it perform on unseen data?
+
+```{r}
+# Make predctions
+pred <- predict_classes(model, test_x)
+
+# Get all kinds of performance measures
+caret::confusionMatrix(as.factor(pred),
+                           as.factor(test_y),
+                           mode = "everything",
+                           positive = "1")
+# And the MCC
+cat("\n MCC \n")
+mlr3measures::mcc(as.factor(test_y), as.factor(pred), positive = "1")
+```
+
+
+
