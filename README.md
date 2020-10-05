@@ -34,4 +34,4 @@ When applied to proteins, the sequence and secondary structure becomes the sente
 
 ## Author
 Jeppe Severens
-jfseverens@outlook.com
+jeppeseverens@gmail.com
