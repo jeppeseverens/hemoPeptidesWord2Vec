@@ -6,9 +6,15 @@ Word2Vec was created with the idea that words in human language derive meaning f
 
 When applied to proteins, the sequence and secondary structure becomes the sentence, with the amino acids and secondary structure as words. To get "words", we split the sequence and structure in n-grams, with in this example only 1-grams. We will use the Word2Vec representations learned for these 1-grams to represent peptides by creating a matrix for each peptide, with per 1-gram in the peptide a row in the matrix with the numeric representation for that 1-gram. To overcome different sequence lengths we zero-pad the matrices. 
 
+<figure>
+  <img src="https://raw.githubusercontent.com/jeppeseverens/hemoPeptidesWord2Vec/main/method.png" alt="figureMethod"/>
+  <figcaption>Figure depicting of how 1-grams are made of a peptide sequence and structure, neighbourhood probability calculations and how a neural network is used to predict this neighborhood probability for each 1-gram. We stop caring about the output and take the weights specific for the input word as representation as input for a CNN./figcaption>
+</figure>
+
 <p align="center">
-  <img src="https://raw.githubusercontent.com/jeppeseverens/hemoPeptidesWord2Vec/main/method.png" />
-  <em>Figure depicting of how 1-grams are made of a peptide sequence and structure, neighbourhood probability calculations and how a neural network is used to predict this neighborhood probability for each 1-gram. We stop caring about the output and take the weights specific for the input word as representation as input for a CNN.</em>
+  <img src="" />
+  <p align="left">
+  <em></em></p>
 </p>
 
 ## Goals
