@@ -8,6 +8,7 @@ When applied to proteins, the sequence and secondary structure becomes the sente
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/jeppeseverens/hemoPeptidesWord2Vec/main/method.png" />
+  <em>Figure depicting of how 1-grams are made of a peptide sequence and structure, neighbourhood probability calculations and how a neural network is used to predict this neighborhood probability for each 1-gram. We stop caring about the output and take the weights specific for the input word as representation as input for a CNN.</em>
 </p>
 
 ## Goals
